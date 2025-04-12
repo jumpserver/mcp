@@ -1,0 +1,24 @@
+[project]
+name = "jms-mcp-server"
+version = "0.1.0"
+description = "JumpServer mcp server"
+readme = "README.md"
+authors = [{ name = "Eric"}]
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi-mcp>=0.2.0",
+]
+
+[tool.ruff.lint]
+
+ignore = [
+    "EM101",  # Exception must not use a string literal, assign to variable first
+    "TRY003", # Avoid specifying long messages outside the exception class
+    "ERA001", # Found commented-out code
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "INP001"]
+
+[tool.ruff]
+line-length = 100
