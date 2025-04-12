@@ -1,22 +1,20 @@
-# JumpServer mcp server
+# JumpServer MCP Server
 
-## 获取创建 JumpServer 相关配置文件 env
+## Configure JumpServer Environment File (.env)
 
-```
+```txt
 # Bearer token
 api_token=xxxxxxx 
 jumpserver_url=http://jumpserverhost
 ```
 
-## 启动容器
+## Start Docker Container
 
+```bash
+docker run -d -it -p 8099:8099 --env-file .env --name jms_mcp ghcr.io/leeeirc/jumpserver-mcp-server:latest
 ```
 
-docker run -d  -it  -p 8099:8099  --env-file .env  --name jms_mcp  jumpserver-mcp-server
-
-```
-
-## mcp server 配置
+## MCP Server Configuration
 
 ```json
 {
