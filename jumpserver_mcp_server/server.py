@@ -8,12 +8,14 @@ It includes:
 
 import typing
 from logging import getLogger
-from typing import Any
+from typing import Any, Optional
 
 import httpx
-from fastapi import FastAPI, Request, Response
+from uuid import UUID
+from fastapi import FastAPI, Request, Response, APIRouter
 from fastapi_mcp import FastApiMCP
 from fastapi_mcp.openapi.convert import convert_openapi_to_mcp_tools
+from fastapi_mcp.transport.sse import FastApiSseTransport
 from mcp import types
 from mcp.server.lowlevel.server import Server
 
@@ -41,7 +43,21 @@ class JumpServerOpenapiMCP(FastApiMCP):
         api_token = kwargs.pop("api_token")
         self.api_token = api_token
         self.swagger_json = kwargs.pop("swagger_json")
+        self.sse_transport = None
         super().__init__(app, **kwargs)
+
+    def is_auth_session(self, session_id: str) -> bool:
+        if not self.sse_transport:
+            return False
+        if not session_id:
+            return False
+        try:
+            session_id = UUID(session_id)
+        except ValueError:
+            return False
+        sse_transport = self.sse_transport
+        ret = session_id in sse_transport._read_stream_writers
+        return ret
 
     def setup_server(self) -> None:
         """Set up the MCP server by converting OpenAPI schema to tools.
@@ -89,6 +105,71 @@ class JumpServerOpenapiMCP(FastApiMCP):
 
         self.server = mcp_server
 
+    def mount(self, router: Optional[FastAPI | APIRouter] = None, mount_path: str = "/mcp") -> None:
+        """
+        Mount the MCP server to **any** FastAPI app or APIRouter.
+        There is no requirement that the FastAPI app or APIRouter is the same as the one that the MCP
+        server was created from.
+
+        Args:
+            router: The FastAPI app or APIRouter to mount the MCP server to. If not provided, the MCP
+                    server will be mounted to the FastAPI app.
+            mount_path: Path where the MCP server will be mounted
+        """
+        # Normalize mount path
+        if not mount_path.startswith("/"):
+            mount_path = f"/{mount_path}"
+        if mount_path.endswith("/"):
+            mount_path = mount_path[:-1]
+
+        if not router:
+            router = self.fastapi
+
+        # Build the base path correctly for the SSE transport
+        if isinstance(router, FastAPI):
+            base_path = router.root_path
+        elif isinstance(router, APIRouter):
+            base_path = self.fastapi.root_path + router.prefix
+        else:
+            raise ValueError(f"Invalid router type: {type(router)}")
+
+        messages_path = f"{base_path}{mount_path}/messages/"
+
+        sse_transport = FastApiSseTransport(messages_path)
+        self.sse_transport = sse_transport
+
+        # Route for MCP connection
+        @router.get(mount_path, include_in_schema=False, operation_id="mcp_connection")
+        async def handle_mcp_connection(request: Request):
+            async with sse_transport.connect_sse(request.scope, request.receive, request._send) as (
+                reader,
+                writer,
+            ):
+                await self.server.run(
+                    reader,
+                    writer,
+                    self.server.create_initialization_options(
+                        notification_options=None, experimental_capabilities={}
+                    ),
+                )
+
+        # Route for MCP messages
+        @router.post(
+            f"{mount_path}/messages/", include_in_schema=False, operation_id="mcp_messages"
+        )
+        async def handle_post_message(request: Request):
+            return await sse_transport.handle_fastapi_post_message(request)
+
+        # HACK: If we got a router and not a FastAPI instance, we need to re-include the router so that
+        # FastAPI will pick up the new routes we added. The problem with this approach is that we assume
+        # that the router is a sub-router of self.fastapi, which may not always be the case.
+        #
+        # TODO: Find a better way to do this.
+        if isinstance(router, APIRouter):
+            self.fastapi.include_router(router)
+
+        logger.info(f"MCP server listening at {mount_path}")
+
 
 class BearerAuth(httpx.Auth):
     """Allows the 'auth' argument to be passed as a token string or bytes.
@@ -116,6 +197,7 @@ class BearerAuth(httpx.Auth):
 
 HTTP_OK = 200
 
+
 def get_swagger_json(url: str = settings.swagger_url) -> dict[str, Any]:
     """Fetch the OpenAPI schema from the given URL.
 
@@ -130,6 +212,7 @@ def get_swagger_json(url: str = settings.swagger_url) -> dict[str, Any]:
     """
     auth = BearerAuth(settings.api_token)
     http_sync_client = httpx.get(url, auth=auth, verify=False, timeout=120)
+
     class OpenAPISchemaFetchError(Exception):
         """Custom exception for OpenAPI schema fetch errors."""
 
@@ -141,25 +224,8 @@ def get_swagger_json(url: str = settings.swagger_url) -> dict[str, Any]:
         raise OpenAPISchemaFetchError(error_message)
     return http_sync_client.json()
 
+
 app = FastAPI()
-
-@app.middleware("http")
-async def check_api_key(request: Request, call_next) -> Response:
-    """Middleware to check the Bearer API key in the request headers.
-
-    This middleware validates the Bearer API key provided in the request headers.
-    """
-    if settings.api_key:
-        api_key = request.headers.get("Authorization")
-        if (
-            not api_key
-            or not api_key.startswith("Bearer ")
-            or api_key != f"Bearer {settings.api_key}"
-        ):
-            logger.error("Unauthorized access attempt detected: Authorization %s", api_key)
-            return Response(status_code=401, content="Unauthorized: Invalid API token")
-    return await call_next(request)
-
 jumpserver_url = settings.jumpserver_url
 base_url = settings.api_base_url
 if not base_url and jumpserver_url:
@@ -190,3 +256,29 @@ if not mount_path.startswith("/"):
 mcp.mount(mount_path=mount_path)
 mcp_path = f"{app.root_path}{mount_path}"
 logger.info("Mounting MCP at path: %s", mcp_path)
+
+
+@app.middleware("http")
+async def check_api_key(request: Request, call_next) -> Response:
+    """Middleware to check the Bearer API key in the request headers.
+
+    This middleware validates the Bearer API key provided in the request headers.
+    """
+    session_id_param = request.query_params.get("session_id")
+    if session_id_param:
+        if mcp.is_auth_session(session_id_param):
+            return await call_next(request)
+        else:
+            logger.error("Unauthorized access attempt detected: session_id %s", session_id_param)
+            return Response(status_code=401, content="Unauthorized: Invalid session ID")
+    
+    if settings.api_key:
+        api_key = request.headers.get("Authorization")
+        if (
+            not api_key
+            or not api_key.startswith("Bearer ")
+            or api_key != f"Bearer {settings.api_key}"
+        ):
+            logger.error("Unauthorized access attempt detected: Authorization %s", api_key)
+            return Response(status_code=401, content="Unauthorized: Invalid API token")
+    return await call_next(request)
