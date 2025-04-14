@@ -3,7 +3,7 @@
 ## Configure JumpServer Environment File (.env)
 
 ```txt
-# Bearer token to access the JumpServer SWAGGER JSON API, optional
+# Bearer token to access the JumpServer Swagger Json API, optional
 api_token=xxxxxxx 
 jumpserver_url=http://jumpserverhost
 ```
@@ -11,7 +11,7 @@ jumpserver_url=http://jumpserverhost
 ## Start Docker Container
 
 ```bash
-docker run -d -it -p 8099:8099 --env-file .env --name jms_mcp ghcr.io/leeeirc/jumpserver-mcp-server:latest
+docker run -d -it -p 8099:8099 --env-file .env --name jms_mcp ghcr.io/jumpserver/mcp:latest
 ```
 
 ## Create JumpServer API Bearer Token for MCP Server
