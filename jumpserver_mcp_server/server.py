@@ -213,6 +213,12 @@ class BearerAuth(httpx.Auth):
 HTTP_OK = 200
 
 
+class OpenAPISchemaFetchError(Exception):
+    """Custom exception for OpenAPI schema fetch errors."""
+
+    pass
+
+
 def get_swagger_json(url: str = settings.swagger_url) -> dict[str, Any]:
     """Fetch the OpenAPI schema from the given URL.
 
@@ -225,19 +231,17 @@ def get_swagger_json(url: str = settings.swagger_url) -> dict[str, Any]:
     Raises:
         OpenAPISchemaFetchError: If the schema cannot be fetched or the response status is not HTTP_OK.
     """
-    auth = BearerAuth(settings.api_token)
-    http_sync_client = httpx.get(url, auth=auth, verify=False, timeout=120)
+    kwargs = {"verify": False, "timeout": 120}
 
-    class OpenAPISchemaFetchError(Exception):
-        """Custom exception for OpenAPI schema fetch errors."""
-
-    if http_sync_client.status_code != HTTP_OK:
-        error_message = (
-            f"Failed to fetch OpenAPI schema: {http_sync_client.status_code} - "
-            f"{http_sync_client.text}"
-        )
+    if settings.api_token:
+        # If an API token is provided, use BearerAuth for authentication
+        auth = BearerAuth(settings.api_token)
+        kwargs["auth"] = auth
+    resp = httpx.get(url, **kwargs)
+    if resp.status_code != HTTP_OK:
+        error_message = f"Failed to fetch OpenAPI schema: {resp.status_code} - {resp.text}"
         raise OpenAPISchemaFetchError(error_message)
-    return http_sync_client.json()
+    return resp.json()
 
 
 app = FastAPI()
