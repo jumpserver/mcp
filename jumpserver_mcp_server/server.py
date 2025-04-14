@@ -9,14 +9,14 @@ It includes:
 import typing
 from logging import getLogger
 from typing import Any, Optional
+from uuid import UUID
 
 import httpx
-from uuid import UUID
-from fastapi import FastAPI, Request, Response, APIRouter
+from fastapi import APIRouter, FastAPI, Request, Response
 from fastapi_mcp import FastApiMCP
 from fastapi_mcp.openapi.convert import convert_openapi_to_mcp_tools
 from fastapi_mcp.transport.sse import FastApiSseTransport
-from mcp import types
+import mcp.types as types
 from mcp.server.lowlevel.server import Server
 
 from .config import settings
@@ -56,8 +56,7 @@ class JumpServerOpenapiMCP(FastApiMCP):
         except ValueError:
             return False
         sse_transport = self.sse_transport
-        ret = session_id in sse_transport._read_stream_writers
-        return ret
+        return session_id in sse_transport._read_stream_writers
 
     def setup_server(self) -> None:
         """Set up the MCP server by converting OpenAPI schema to tools.
@@ -95,8 +94,20 @@ class JumpServerOpenapiMCP(FastApiMCP):
         async def handle_call_tool(
             name: str, arguments: dict[str, Any]
         ) -> list[types.TextContent | types.ImageContent | types.EmbeddedResource]:
+            try:
+                ctx = mcp_server.request_context
+                session = ctx.session
+                experimental = session._init_options.capabilities.experimental
+                authorization = experimental.get("session_token", {}).get("authorization")
+                logger.debug("Session token authorization: %s", authorization)
+            except Exception as e:
+                logger.error("Error getting session token: %s", e)
+                authorization = ""
+            http_client = httpx.AsyncClient(
+                verify=False, headers={"Authorization": authorization}, timeout=60
+            )
             return await self._execute_api_tool(
-                client=self._http_client,
+                client=http_client,
                 base_url=self._base_url or "",
                 tool_name=name,
                 arguments=arguments,
@@ -145,11 +156,15 @@ class JumpServerOpenapiMCP(FastApiMCP):
                 reader,
                 writer,
             ):
+                authorization = request.headers.get("authorization", "")
                 await self.server.run(
                     reader,
                     writer,
                     self.server.create_initialization_options(
-                        notification_options=None, experimental_capabilities={}
+                        notification_options=None,
+                        experimental_capabilities={
+                            "session_token": {"authorization": authorization},
+                        },
                     ),
                 )
 
@@ -233,7 +248,8 @@ if not base_url and jumpserver_url:
     logger.info("Base API URL set to: %s", base_url)
 swagger_url = settings.swagger_url
 if not swagger_url and jumpserver_url:
-    swagger_url = f"{jumpserver_url}/api/docs/?format=openapi"
+    # swagger_url = f"{jumpserver_url}/api/docs/?format=openapi"
+    swagger_url = f"{jumpserver_url}/api/swagger.json"
     logger.info("Swagger URL set to: %s", swagger_url)
 logger.info("Fetching OpenAPI schema from API URL: %s", swagger_url)
 swagger_json = get_swagger_json(swagger_url)
@@ -271,7 +287,6 @@ async def check_api_key(request: Request, call_next) -> Response:
         else:
             logger.error("Unauthorized access attempt detected: session_id %s", session_id_param)
             return Response(status_code=401, content="Unauthorized: Invalid session ID")
-    
     if settings.api_key:
         api_key = request.headers.get("Authorization")
         if (
