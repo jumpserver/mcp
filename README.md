@@ -36,7 +36,7 @@ echo "Your Bearer token: $TOKEN"
 ```json
 {
     "type": "sse",
-    "url": "http://127.0.0.1:8099/mcp",
+    "url": "http://127.0.0.1:8099/sse",
     "headers": {
         "Authorization": "Bearer xxxxxxxx"
     }
