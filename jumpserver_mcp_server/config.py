@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     api_key: str = ''
     api_base_url:str = ''
     api_token:str=  ''
-    base_path: str = '/mcp'
+    base_path: str = '/sse'
     swagger_url: str = ''
     log_level: str = 'INFO'
     debug: bool = False
