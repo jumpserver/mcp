@@ -43,6 +43,7 @@ class JumpServerOpenapiMCP(FastApiMCP):
         api_token = kwargs.pop("api_token")
         self.api_token = api_token
         self.swagger_json = kwargs.pop("swagger_json")
+        self.base_url = kwargs.pop("base_url", None)
         self.sse_transport = None
         super().__init__(app, **kwargs)
 
