@@ -1,8 +1,0 @@
-vendor
-build/*
-logs/*
-data/*
-release/*
-ui/node_modules/
-.env
-*api.sh
