@@ -24,7 +24,7 @@ def _build_user_url(user_id: Optional[str] = None) -> str:
     return USERS_ENDPOINT
 
 
-@mcp.tool("tools://list-users")
+@mcp.tool("list-users")
 async def list_users(
     limit: int = 20,
     offset: int = 0,
@@ -56,7 +56,7 @@ async def list_users(
     return await safe_request("GET", USERS_ENDPOINT, params=params)
 
 
-@mcp.tool("tools://update-user-status")
+@mcp.tool("update-user-status")
 async def update_user_status(
     user_id: str,
     set_is_login_blocked: Optional[bool] = None,

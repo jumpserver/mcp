@@ -6,7 +6,7 @@ from app import mcp
 from utils import request_resource, safe_request
 
 
-@mcp.tool("tools://get-supported-resources")
+@mcp.tool("get-supported-resources")
 async def get_supported_resources() -> Dict[str, Any]:
     """
     Return the JumpServer-supported resource metadata list.
@@ -14,7 +14,7 @@ async def get_supported_resources() -> Dict[str, Any]:
     return await safe_request("GET", "/api/v1/resources/")
 
 
-@mcp.tool("tools://list-resource")
+@mcp.tool("list-resource")
 async def list_resource(
     resource: str,
     limit: int = 20,
@@ -41,7 +41,7 @@ async def list_resource(
     return await request_resource("GET", resource, params=params)
 
 
-@mcp.tool("tools://get-resource")
+@mcp.tool("get-resource")
 async def get_resource(
     resource: str,
     resource_id: str,
@@ -77,7 +77,7 @@ def _extract_resource_id(result: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-@mcp.tool("tools://create-resource")
+@mcp.tool("create-resource")
 async def create_resource(
     resource: str,
     data: Dict[str, Any],
@@ -106,7 +106,7 @@ async def create_resource(
     return result
 
 
-@mcp.tool("tools://update-resource")
+@mcp.tool("update-resource")
 async def update_resource(
     resource: str,
     resource_id: str,
