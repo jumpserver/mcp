@@ -7,6 +7,7 @@ This module initializes the FastMCP server instance.
 from __future__ import annotations
 
 from fastmcp import FastMCP
+from auth import JumpServerAuthProvider
 
 
 mcp = FastMCP(
@@ -17,4 +18,5 @@ mcp = FastMCP(
         via `data://resources/{resource}/schema/{action}`, then run the tools
         to list, create, update, or get resource entries.
     """,
+    auth=JumpServerAuthProvider(),
 )

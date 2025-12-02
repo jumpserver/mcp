@@ -11,6 +11,7 @@ from typing import Any, Dict, Optional
 
 from app import mcp
 from utils import safe_request
+from permissions import require_role, require_superuser
 
 USERS_ENDPOINT = "/api/v1/users/users/"
 
@@ -25,6 +26,7 @@ def _build_user_url(user_id: Optional[str] = None) -> str:
 
 
 @mcp.tool("list-users")
+@require_role("superuser", "admin", "auditor")  # Allow multiple roles to list users
 async def list_users(
     limit: int = 20,
     offset: int = 0,
@@ -57,6 +59,7 @@ async def list_users(
 
 
 @mcp.tool("update-user-status")
+@require_superuser  # Only superusers can update user status
 async def update_user_status(
     user_id: str,
     set_is_login_blocked: Optional[bool] = None,

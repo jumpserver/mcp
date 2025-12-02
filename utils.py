@@ -7,6 +7,7 @@ This module contains shared HTTP client and request handling functions.
 from __future__ import annotations
 
 import os
+from fastmcp.server.dependencies import get_http_headers
 from typing import Any, Dict, Optional
 
 import httpx
@@ -82,8 +83,13 @@ async def safe_request(
             - "error": Error message (if failed)
             - "error_detail": Detailed error information (if available)
     """
+    headers = get_http_headers()
+
+    if kwargs.get('headers', None):
+        headers.update(kwargs['headers'])
+
     try:
-        response = await client.request(method, url, params=params, json=json, **kwargs)
+        response = await client.request(method, url, params=params, json=json, headers=headers, **kwargs)
         response.raise_for_status()
         
         return {
