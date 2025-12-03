@@ -62,19 +62,12 @@ class JumpServerAuthProvider(TokenVerifier):
 
     async def verify_token(self, token: str) -> AccessToken | None:
         """Verify JumpServer session token."""
-        # Check token format: jms-<sessionid>
-        if not token.startswith("jms-"):
-            logger.debug(f"Token does not start with 'jms-': {token[:20]}...")
-            return None
-
-        session_id = token[4:]  # Remove "jms-" prefix
-        if not session_id:
-            logger.debug("Empty session ID")
-            return None
         
         headers = get_http_headers() 
         headers['Accept'] = 'application/json'
-        headers.pop('authorization', None)
+
+        if token and token.startswith('jms'):
+            headers.pop('authorization', '')
 
         try:
             # Request user profile with session cookie
@@ -104,7 +97,6 @@ class JumpServerAuthProvider(TokenVerifier):
                         "is_org_admin": user_data.get("is_org_admin", False),
                         "is_superuser": user_data.get("is_superuser", False),
                         "jumpserver_user_data": user_data,  # Contains full user data including roles
-                        "session_id": session_id,
                     },
                 )
         

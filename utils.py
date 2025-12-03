@@ -85,6 +85,10 @@ async def safe_request(
     """
     headers = get_http_headers()
 
+    token = headers.get('authorization', '').replace('Bearer', '').strip()
+    if token.startswith('jms'):
+        headers.pop('authorization')
+
     if kwargs.get('headers', None):
         headers.update(kwargs['headers'])
 
