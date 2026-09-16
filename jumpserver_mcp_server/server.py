@@ -105,11 +105,13 @@ class JumpServerOpenapiMCP(FastApiMCP):
                 logger.error("Error getting session token: %s", e)
                 authorization = ""
             http_client = httpx.AsyncClient(
-                verify=False, headers={"Authorization": authorization}, timeout=60
+                verify=False,
+                headers={"Authorization": authorization},
+                timeout=60,
+                base_url=settings.jumpserver_url,
             )
             return await self._execute_api_tool(
                 client=http_client,
-                base_url=self._base_url or "",
                 tool_name=name,
                 arguments=arguments,
                 operation_map=self.operation_map,
