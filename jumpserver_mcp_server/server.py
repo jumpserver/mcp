@@ -6,6 +6,10 @@ It includes:
 - Utility classes and functions for OpenAPI schema handling.
 """
 
+import base64
+import datetime
+import hashlib
+import hmac
 import typing
 from logging import getLogger
 from typing import Any, Optional
@@ -79,8 +83,14 @@ class JumpServerOpenapiMCP(FastApiMCP):
         self.tools = self._filter_tools(all_tools, openapi_schema)
         logger.info("Filtered to %d tools after applying filters.", len(self.tools))
 
-        # Normalize base URL
-        self._base_url = self._base_url.removesuffix("/")
+        # `FastApiMCP.__init__` (fastapi-mcp==0.3.3) hardcodes `self._base_url`
+        # to a placeholder ("http://apiserver") meant only for its own
+        # in-process ASGI-transport introspection, which never makes a real
+        # network call. Our own configured base_url (stored as
+        # `self.base_url` above) is what actual outbound tool calls need to
+        # use, so it must win here — otherwise every real call resolves
+        # "apiserver" and fails with a DNS error.
+        self._base_url = (self.base_url or self._base_url).removesuffix("/")
 
         # Create the MCP lowlevel server
         mcp_server: Server = Server(self.name, self.description)
@@ -99,17 +109,38 @@ class JumpServerOpenapiMCP(FastApiMCP):
                 ctx = mcp_server.request_context
                 session = ctx.session
                 experimental = session._init_options.capabilities.experimental
-                authorization = experimental.get("session_token", {}).get("authorization")
+                session_token = experimental.get("session_token", {})
+                authorization = session_token.get("authorization", "")
+                access_key_id = session_token.get("access_key_id", "")
+                access_key_secret = session_token.get("access_key_secret", "")
                 logger.debug("Session token authorization: %s", authorization)
             except Exception as e:
                 logger.error("Error getting session token: %s", e)
                 authorization = ""
-            http_client = httpx.AsyncClient(
-                verify=False, headers={"Authorization": authorization}, timeout=60
-            )
+                access_key_id = ""
+                access_key_secret = ""
+            if access_key_id and access_key_secret:
+                # Each developer's own Access Key: the server signs every
+                # request on their behalf, so no bearer token needs to be
+                # kept around or refreshed.
+                http_client = httpx.AsyncClient(
+                    verify=False,
+                    auth=AccessKeyAuth(access_key_id, access_key_secret),
+                    timeout=60,
+                    base_url=self._base_url or "",
+                )
+            else:
+                http_client = httpx.AsyncClient(
+                    verify=False,
+                    headers={"Authorization": authorization},
+                    timeout=60,
+                    base_url=self._base_url or "",
+                )
+            # NOTE: base_url must live on the http_client, not as a kwarg to
+            # _execute_api_tool — the pinned fastapi-mcp version doesn't
+            # accept one there and raises a TypeError on every tool call.
             return await self._execute_api_tool(
                 client=http_client,
-                base_url=self._base_url or "",
                 tool_name=name,
                 arguments=arguments,
                 operation_map=self.operation_map,
@@ -158,13 +189,19 @@ class JumpServerOpenapiMCP(FastApiMCP):
                 writer,
             ):
                 authorization = request.headers.get("authorization", "")
+                access_key_id = request.headers.get("x-jumpserver-access-key-id", "")
+                access_key_secret = request.headers.get("x-jumpserver-access-key-secret", "")
                 await self.server.run(
                     reader,
                     writer,
                     self.server.create_initialization_options(
                         notification_options=None,
                         experimental_capabilities={
-                            "session_token": {"authorization": authorization},
+                            "session_token": {
+                                "authorization": authorization,
+                                "access_key_id": access_key_id,
+                                "access_key_secret": access_key_secret,
+                            },
                         },
                     ),
                 )
@@ -211,6 +248,61 @@ class BearerAuth(httpx.Auth):
         return f"Bearer {token}"
 
 
+class AccessKeyAuth(httpx.Auth):
+    """JumpServer Access Key authentication using HTTP Signature (hmac-sha256).
+
+    Signs each request with the `(request-target)`, `accept` and `date`
+    headers, matching JumpServer's Access Key auth scheme. Unlike a Bearer
+    token, an Access Key is permanent and generated by JumpServer's own
+    password/MFA login, so it can be handed to a client once and forwarded
+    per-session without ever needing to be refreshed.
+    """
+
+    def __init__(self, access_key_id: str, access_key_secret: str) -> None:
+        self.access_key_id = access_key_id
+        self.access_key_secret = access_key_secret
+
+    def auth_flow(
+        self, request: httpx.Request
+    ) -> typing.Generator[httpx.Request, httpx.Response, None]:
+        date = datetime.datetime.now(datetime.timezone.utc).strftime(
+            "%a, %d %b %Y %H:%M:%S GMT"
+        )
+        accept = "application/json"
+        request.headers["Date"] = date
+        request.headers["Accept"] = accept
+
+        path = request.url.path
+        if request.url.query:
+            # httpx.URL.query is bytes, not str — an f-string embeds its
+            # repr (`b'limit=100'`) rather than the actual query text,
+            # which silently signs the wrong request-target and gets
+            # rejected as an invalid signature on any request that has
+            # query parameters (anything without one signs fine by
+            # accident, since empty bytes is falsy).
+            path = f"{path}?{request.url.query.decode()}"
+        request_target = f"{request.method.lower()} {path}"
+        signing_string = "\n".join(
+            [
+                f"(request-target): {request_target}",
+                f"accept: {accept}",
+                f"date: {date}",
+            ]
+        )
+        signature = base64.b64encode(
+            hmac.new(
+                self.access_key_secret.encode(),
+                signing_string.encode(),
+                hashlib.sha256,
+            ).digest()
+        ).decode()
+        request.headers["Authorization"] = (
+            f'Signature keyId="{self.access_key_id}",algorithm="hmac-sha256",'
+            f'headers="(request-target) accept date",signature="{signature}"'
+        )
+        yield request
+
+
 HTTP_OK = 200
 
 
@@ -234,7 +326,12 @@ def get_swagger_json(url: str = settings.swagger_url) -> dict[str, Any]:
     """
     kwargs = {"verify": False, "timeout": 120}
 
-    if settings.api_token:
+    if settings.access_key_id and settings.access_key_secret:
+        # Access Key auth is permanent, so it's preferred for this one-time
+        # startup call over a Bearer token that can silently expire between
+        # container restarts.
+        kwargs["auth"] = AccessKeyAuth(settings.access_key_id, settings.access_key_secret)
+    elif settings.api_token:
         # If an API token is provided, use BearerAuth for authentication
         auth = BearerAuth(settings.api_token)
         kwargs["auth"] = auth
@@ -249,7 +346,13 @@ app = FastAPI()
 jumpserver_url = settings.jumpserver_url
 base_url = settings.api_base_url
 if not base_url and jumpserver_url:
-    base_url = f"{jumpserver_url}/api/v1"
+    # No `/api/v1` suffix here: JumpServer's own OpenAPI schema already
+    # declares each operation's path with that prefix included (e.g.
+    # `/api/v1/users/profile/`), and httpx's base_url + path merging is a
+    # plain concatenation rather than RFC 3986 absolute-path replacement —
+    # so appending it here doubles it into `/api/v1/api/v1/...` on every
+    # real tool call.
+    base_url = jumpserver_url
     logger.info("Base API URL set to: %s", base_url)
 swagger_url = settings.swagger_url
 if not swagger_url and jumpserver_url:
@@ -258,7 +361,10 @@ if not swagger_url and jumpserver_url:
     logger.info("Swagger URL set to: %s", swagger_url)
 logger.info("Fetching OpenAPI schema from API URL: %s", swagger_url)
 swagger_json = get_swagger_json(swagger_url)
-auth = BearerAuth(settings.api_token)
+if settings.access_key_id and settings.access_key_secret:
+    auth = AccessKeyAuth(settings.access_key_id, settings.access_key_secret)
+else:
+    auth = BearerAuth(settings.api_token)
 http_client = httpx.AsyncClient(auth=auth, verify=False)
 mcp = JumpServerOpenapiMCP(
     app,
@@ -281,9 +387,17 @@ logger.info("Mounting MCP at path: %s", mcp_path)
 
 @app.middleware("http")
 async def check_api_key(request: Request, call_next) -> Response:
-    """Middleware to check the Bearer API key in the request headers.
+    """Middleware to gate access to the MCP server.
 
-    This middleware validates the Bearer API key provided in the request headers.
+    The `Authorization` header is reserved for each caller's own JumpServer
+    credentials, which are forwarded per-session so that every JumpServer API
+    call is attributed to that individual user. Gating access to the MCP
+    server itself is done separately via `gateway_key` / `X-MCP-Gateway-Key`,
+    so the two concerns don't collide on the same header.
+
+    `api_key` (checked against `Authorization`) is kept only for backward
+    compatibility with existing deployments that don't need per-user
+    attribution; it is ignored once `gateway_key` is configured.
     """
     session_id_param = request.query_params.get("session_id")
     if session_id_param:
@@ -292,7 +406,12 @@ async def check_api_key(request: Request, call_next) -> Response:
         else:
             logger.error("Unauthorized access attempt detected: session_id %s", session_id_param)
             return Response(status_code=401, content="Unauthorized: Invalid session ID")
-    if settings.api_key:
+    if settings.gateway_key:
+        gateway_key = request.headers.get("x-mcp-gateway-key")
+        if gateway_key != settings.gateway_key:
+            logger.error("Unauthorized access attempt detected: X-MCP-Gateway-Key missing or invalid")
+            return Response(status_code=401, content="Unauthorized: Invalid gateway key")
+    elif settings.api_key:
         api_key = request.headers.get("Authorization")
         if (
             not api_key

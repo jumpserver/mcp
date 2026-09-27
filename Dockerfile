@@ -1,5 +1,11 @@
 # Build stage with explicit platform specification
-FROM ghcr.io/astral-sh/uv:python3.11-alpine
+#
+# Debian-slim (glibc), not Alpine: Alpine's musl libc DNS resolver serializes
+# lookups and has weak retry behavior under concurrency, which surfaces as
+# intermittent `[Errno -3] Try again` (EAI_AGAIN) once real traffic starts —
+# a fresh httpx.AsyncClient() per tool call means a fresh DNS lookup each
+# time. glibc's resolver doesn't share this limitation.
+FROM ghcr.io/astral-sh/uv:python3.11-bookworm-slim
 
 # Install the project into /app
 WORKDIR /app
