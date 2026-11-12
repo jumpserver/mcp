@@ -42,3 +42,11 @@ echo "Your Bearer token: $TOKEN"
     }
 }
 ```
+
+## Related Projects / 相关项目
+
+Community projects that extend JumpServer with MCP capabilities, complementary to this official management-plane server:
+
+- [jumpserver-exec](https://github.com/yi-nology/jumpserver-exec) — 社区执行面 MCP 服务：经堡垒机 koko(2222) 在受管机器上执行命令、传输文件（18 个工具：批量执行 / 后台任务 / 跨机直传 / 危险命令确认 / 审计留痕），与本项目（管理面）互补。
+- [jumpserver-mgmt](https://github.com/yi-nology/jumpserver-mgmt) — 社区管理面 MCP 服务。
+- [jumpserver-kit](https://github.com/yi-nology/jumpserver-kit) — 上述社区项目的共用底座（协议层 / 门禁 / 输出契约 / 留痕 / 脱敏 / 风险分类）。
